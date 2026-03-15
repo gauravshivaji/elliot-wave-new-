@@ -5,91 +5,43 @@ from scipy.signal import argrelextrema
 import plotly.graph_objects as go
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score
+from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
 import ta
 
-
-############################################
-# DATA LOADER (AUTO DETECT FORMAT)
-############################################
-
-def load_dataset(file):
-
-    df = pd.read_csv(file)
-
-    # If Date column missing assume first column is date
-    if "Date" not in df.columns:
-        first_col = df.columns[0]
-        df.rename(columns={first_col: "Date"}, inplace=True)
-
-    # Convert to datetime safely
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-
-    df = df.dropna(subset=["Date"])
-
-    # If dataset already long format
-    if "Stock" in df.columns and "Close" in df.columns:
-
-        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-        df = df.dropna()
-
-        return df
-
-    # Otherwise assume wide format
-    price_columns = [c for c in df.columns if c != "Date"]
-
-    df = df.melt(
-        id_vars=["Date"],
-        value_vars=price_columns,
-        var_name="Stock",
-        value_name="Close"
-    )
-
-    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-
-    df = df.dropna()
-
-    return df
-
-
-############################################
+#############################################
 # FEATURE ENGINEERING
-############################################
+#############################################
 
 def add_features(df):
 
     df["RSI"] = ta.momentum.RSIIndicator(
-        close=df["Close"],
-        window=14
+        df["Close"], window=14
     ).rsi()
 
-    df["Return"] = df["Close"].pct_change()
+    df["return"] = df["Close"].pct_change()
 
-    df["Fib_Ratio"] = (
+    df["fib_ratio"] = (
         df["Close"] - df["Close"].rolling(30).min()
     ) / (
         df["Close"].rolling(30).max()
         - df["Close"].rolling(30).min()
     )
 
-    df["Target"] = (df["Close"].shift(-5) > df["Close"]).astype(int)
+    df["target"] = (df["Close"].shift(-5) > df["Close"]).astype(int)
 
     df = df.dropna()
 
     return df
 
 
-############################################
+#############################################
 # PIVOT DETECTION
-############################################
+#############################################
 
 def detect_pivots(df):
-
-    if len(df) < 50:
-        return pd.DataFrame()
 
     order = 25
 
@@ -107,19 +59,18 @@ def detect_pivots(df):
 
     pivots = sorted(list(highs) + list(lows))
 
-    return df.iloc[pivots]
+    pivot_df = df.iloc[pivots]
+
+    return pivot_df
 
 
-############################################
+#############################################
 # ELLIOTT WAVE DETECTION
-############################################
+#############################################
 
 def detect_elliott(pivots):
 
     cycles = []
-
-    if len(pivots) < 6:
-        return cycles
 
     prices = pivots["Close"].values
 
@@ -153,49 +104,43 @@ def detect_elliott(pivots):
     return cycles
 
 
-############################################
-# TRAIN MODELS
-############################################
+#############################################
+# MODEL TRAINING
+#############################################
 
 def train_models(df):
 
-    if len(df) < 100:
-        return None
-
-    features = ["RSI","Fib_Ratio","Return"]
+    features = ["RSI","fib_ratio","return"]
 
     X = df[features]
-    y = df["Target"]
+    y = df["target"]
 
     X_train,X_test,y_train,y_test = train_test_split(
         X,y,test_size=0.2,shuffle=False
     )
 
-    ###################################
-    # Random Forest
-    ###################################
+    rf = RandomForestClassifier(
+        n_estimators=300
+    )
 
-    rf = RandomForestClassifier(n_estimators=300)
     rf.fit(X_train,y_train)
 
     rf_pred = rf.predict(X_test)
 
-    ###################################
-    # XGBoost
-    ###################################
+    xgb = XGBClassifier(
+        n_estimators=400
+    )
 
-    xgb = XGBClassifier(n_estimators=400)
     xgb.fit(X_train,y_train)
 
     xgb_pred = xgb.predict(X_test)
 
-    ###################################
-    # Comparison
-    ###################################
-
     results = pd.DataFrame({
 
-        "Model":["Random Forest","XGBoost"],
+        "Model":[
+            "Random Forest",
+            "XGBoost"
+        ],
 
         "Accuracy":[
             accuracy_score(y_test,rf_pred),
@@ -211,15 +156,14 @@ def train_models(df):
             recall_score(y_test,rf_pred),
             recall_score(y_test,xgb_pred)
         ]
-
     })
 
-    return results
+    return rf,xgb,results
 
 
-############################################
+#############################################
 # PLOT CHART
-############################################
+#############################################
 
 def plot_chart(df,pivots,cycles):
 
@@ -234,25 +178,23 @@ def plot_chart(df,pivots,cycles):
         )
     )
 
-    if len(pivots) > 0:
-
-        fig.add_trace(
-            go.Scatter(
-                x=pivots["Date"],
-                y=pivots["Close"],
-                mode="markers",
-                name="Pivots"
-            )
+    fig.add_trace(
+        go.Scatter(
+            x=pivots["Date"],
+            y=pivots["Close"],
+            mode="markers",
+            name="Pivots"
         )
+    )
 
     for c in cycles:
 
-        wave = pivots.iloc[c[0]:c[1]+1]
+        wave_points = pivots.iloc[c[0]:c[1]+1]
 
         fig.add_trace(
             go.Scatter(
-                x=wave["Date"],
-                y=wave["Close"],
+                x=wave_points["Date"],
+                y=wave_points["Close"],
                 mode="lines+markers",
                 name="Elliott Cycle"
             )
@@ -261,69 +203,53 @@ def plot_chart(df,pivots,cycles):
     return fig
 
 
-############################################
-# STREAMLIT APP
-############################################
+#############################################
+# STREAMLIT DASHBOARD
+#############################################
 
 st.title("📈 Elliott Wave + Fibonacci ML Dashboard")
 
-uploaded = st.file_uploader("Upload 6-Year Dataset")
+file = st.file_uploader("Upload 6 Year Stock Dataset")
 
-if uploaded:
+if file:
 
-    df = load_dataset(uploaded)
+    df = pd.read_csv(file)
 
-    st.subheader("Dataset Preview")
-    st.dataframe(df.head())
+    df["Date"] = pd.to_datetime(df["Date"])
 
-    st.write("Stocks detected:", df["Stock"].nunique())
+    stock = st.selectbox(
+        "Select Stock",
+        df["Stock"].unique()
+    )
 
-    stocks = df["Stock"].unique()
+    df = df[df["Stock"] == stock]
 
-    if len(stocks) == 0:
+    df = df.sort_values("Date")
 
-        st.error("No stocks detected in dataset")
+    df = add_features(df)
 
-    else:
+    pivots = detect_pivots(df)
 
-        stock = st.selectbox("Select Stock", stocks)
+    cycles = detect_elliott(pivots)
 
-        df_stock = df[df["Stock"] == stock]
+    rf,xgb,results = train_models(df)
 
-        df_stock = df_stock.sort_values("Date")
+    fig = plot_chart(df,pivots,cycles)
 
-        df_stock = add_features(df_stock)
+    st.subheader("Stock Price with Elliott Waves")
 
-        if len(df_stock) < 100:
+    st.plotly_chart(fig,use_container_width=True)
 
-            st.warning("Not enough data to train model")
+    st.subheader("Model Comparison")
 
-        else:
+    st.dataframe(results)
 
-            pivots = detect_pivots(df_stock)
+    best_model = results.sort_values(
+        "Accuracy",
+        ascending=False
+    ).iloc[0]
 
-            cycles = detect_elliott(pivots)
-
-            results = train_models(df_stock)
-
-            fig = plot_chart(df_stock,pivots,cycles)
-
-            st.subheader("Stock Chart with Elliott Waves")
-
-            st.plotly_chart(fig,use_container_width=True)
-
-            st.subheader("Model Comparison")
-
-            if results is not None:
-
-                st.dataframe(results)
-
-                best = results.sort_values(
-                    "Accuracy",
-                    ascending=False
-                ).iloc[0]
-
-                st.success(
-                    f"Best Model: {best['Model']} "
-                    f"(Accuracy {best['Accuracy']:.2f})"
-                )
+    st.success(
+        f"Best Model: {best_model['Model']} "
+        f"(Accuracy {best_model['Accuracy']:.2f})"
+    )
