@@ -232,7 +232,53 @@ def fibonacci_levels(df):
 
     return levels
 
+#################################################
+# NEW FEATURE: 1 YEAR RETURN ANALYSIS
+#################################################
 
+st.subheader("📅 1 Year Investment Analysis")
+
+selected_date = st.date_input(
+    "Select Investment Date",
+    value=stock["Date"].max().date()
+)
+
+investment = st.number_input(
+    "Investment Amount",
+    value=100000
+)
+
+if st.button("Run 1-Year Analysis"):
+
+    result = one_year_return_analysis(
+        stock,
+        pd.to_datetime(selected_date),
+        model,
+        investment
+    )
+
+    st.write("Start Price:", round(result["start_price"],2))
+    st.write("End Date Used:", result["end_date"].date())
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric(
+            "Predicted Portfolio Value",
+            round(result["predicted_value"],2)
+        )
+
+    with col2:
+        st.metric(
+            "Actual Portfolio Value",
+            round(result["actual_value"],2)
+        )
+
+    pred_return = ((result["predicted_value"] - investment)/investment)*100
+    actual_return = ((result["actual_value"] - investment)/investment)*100
+
+    st.write("Predicted Return %:", round(pred_return,2))
+    st.write("Actual Return %:", round(actual_return,2))
 #################################################
 # PLOT
 #################################################
@@ -251,7 +297,56 @@ def plot_chart(df):
 
     st.plotly_chart(fig, use_container_width=True)
 
+#################################################
+# 1 YEAR RETURN PREDICTION FEATURE
+#################################################
 
+def one_year_return_analysis(df, selected_date, model, investment=100000):
+
+    df = df.sort_values("Date").reset_index(drop=True)
+
+    # Find nearest date
+    df["DateDiff"] = abs(df["Date"] - selected_date)
+    start_idx = df["DateDiff"].idxmin()
+
+    start_price = df.loc[start_idx, "Close"]
+
+    # Calculate predicted return using signals
+    position = investment / start_price
+    capital = 0
+
+    end_idx = min(start_idx + 252, len(df)-1)
+
+    for i in range(start_idx, end_idx):
+
+        signal = df["Prediction"].iloc[i]
+        price = df["Close"].iloc[i]
+
+        if signal == 1 and capital > 0:
+
+            position = capital / price
+            capital = 0
+
+        elif signal == -1 and position > 0:
+
+            capital = position * price
+            position = 0
+
+    predicted_value = capital + position * df["Close"].iloc[end_idx]
+
+    # Actual value (buy & hold)
+    actual_price = df["Close"].iloc[end_idx]
+    actual_value = investment * (actual_price / start_price)
+
+    end_date = df["Date"].iloc[end_idx]
+
+    return {
+        "start_price": start_price,
+        "end_price": actual_price,
+        "predicted_value": predicted_value,
+        "actual_value": actual_value,
+        "end_date": end_date
+    }
 #################################################
 # MAIN
 #################################################
