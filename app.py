@@ -4,19 +4,21 @@ import numpy as np
 import plotly.graph_objects as go
 
 import ta
-
 from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
 
 st.set_page_config(layout="wide")
+
 st.title("📈 AI Stock Ranking System (1-Year Prediction)")
 
-#############################################
+##################################################
 # FEATURE ENGINEERING
-#############################################
+##################################################
 
 def add_features(df):
+
+    df = df.sort_values("Date")
 
     df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
 
@@ -34,13 +36,13 @@ def add_features(df):
     return df
 
 
-#############################################
+##################################################
 # CREATE 1 YEAR TARGET
-#############################################
+##################################################
 
 def create_target(df):
 
-    # 252 trading days ≈ 1 year
+    df = df.sort_values(["Ticker","Date"])
 
     df["FuturePrice"] = df.groupby("Ticker")["Close"].shift(-252)
 
@@ -51,9 +53,9 @@ def create_target(df):
     return df
 
 
-#############################################
+##################################################
 # TRAIN MODEL
-#############################################
+##################################################
 
 def train_model(df):
 
@@ -76,12 +78,12 @@ def train_model(df):
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
-        shuffle=False,
-        test_size=0.2
+        test_size=0.2,
+        shuffle=False
     )
 
     model = XGBRegressor(
-        n_estimators=400,
+        n_estimators=300,
         max_depth=6,
         learning_rate=0.05
     )
@@ -95,9 +97,9 @@ def train_model(df):
     return model, score
 
 
-#############################################
+##################################################
 # RANK STOCKS
-#############################################
+##################################################
 
 def rank_stocks(df, model):
 
@@ -115,9 +117,7 @@ def rank_stocks(df, model):
 
     latest = latest.dropna()
 
-    latest["PredictedReturn"] = model.predict(
-        latest[features]
-    )
+    latest["PredictedReturn"] = model.predict(latest[features])
 
     ranked = latest.sort_values(
         "PredictedReturn",
@@ -127,9 +127,9 @@ def rank_stocks(df, model):
     return ranked
 
 
-#############################################
-# PRICE CHART
-#############################################
+##################################################
+# CHART
+##################################################
 
 def plot_chart(df):
 
@@ -148,9 +148,9 @@ def plot_chart(df):
     st.plotly_chart(fig, use_container_width=True)
 
 
-#############################################
-# STREAMLIT APP
-#############################################
+##################################################
+# APP
+##################################################
 
 file = st.file_uploader("Upload Dataset", type="csv")
 
@@ -166,29 +166,35 @@ if file:
 
     st.dataframe(df.head())
 
-    #########################################
+    ##################################################
 
-    df = df.groupby("Ticker").apply(add_features)
+    st.write("Generating technical indicators...")
+
+    df = (
+        df.groupby("Ticker", group_keys=False)
+        .apply(add_features)
+        .reset_index(drop=True)
+    )
+
+    ##################################################
+
+    st.write("Creating 1-year future return target...")
 
     df = create_target(df)
 
-    #########################################
+    ##################################################
 
-    st.subheader("Training Model on ALL Stocks")
+    st.write("Training model on all stocks...")
 
     model, score = train_model(df)
 
     st.success(f"Model R² Score: {round(score,3)}")
 
-    #########################################
-
-    st.subheader("Ranking Stocks")
-
-    ranked = rank_stocks(df, model)
-
-    #########################################
+    ##################################################
 
     st.subheader("Top 10 Stocks to Buy Today")
+
+    ranked = rank_stocks(df, model)
 
     top10 = ranked.head(10)[
         ["Ticker","Close","PredictedReturn"]
@@ -196,10 +202,10 @@ if file:
 
     st.dataframe(top10)
 
-    #########################################
+    ##################################################
 
     ticker = st.selectbox(
-        "Select Stock Chart",
+        "View Stock Chart",
         ranked["Ticker"].unique()
     )
 
