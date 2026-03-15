@@ -215,7 +215,21 @@ if file:
 
     df = pd.read_csv(file)
 
+# If Date column not found, assume first column is Date
+    if "Date" not in df.columns:
+        df.rename(columns={df.columns[0]: "Date"}, inplace=True)
+
     df["Date"] = pd.to_datetime(df["Date"])
+
+# Convert wide format → long format
+    if "Stock" not in df.columns:
+        df = df.melt(
+        id_vars=["Date"],
+        var_name="Stock",
+        value_name="Close"
+    )
+
+    df = df.dropna()
 
     stock = st.selectbox(
         "Select Stock",
