@@ -118,7 +118,6 @@ def create_labels(df):
     df["Signal"] = 0
 
     df.loc[(df["BullishDiv"] == 1) | (df["RSI"] < 30) | (df["Wave3"] == 1), "Signal"] = 1
-
     df.loc[(df["BearishDiv"] == 1) | (df["RSI"] > 70), "Signal"] = -1
 
     return df
@@ -131,39 +130,22 @@ def create_labels(df):
 def train_model(df):
 
     features = [
-        "RSI",
-        "MACD",
-        "MACD_signal",
-        "MA20",
-        "MA50",
-        "Momentum",
-        "Volatility",
-        "Wave3",
-        "BullishDiv",
-        "BearishDiv"
+        "RSI","MACD","MACD_signal","MA20","MA50",
+        "Momentum","Volatility","Wave3","BullishDiv","BearishDiv"
     ]
 
     df = df.dropna()
 
     X = df[features]
-
     y = df["Signal"]
 
-    # Encode labels
-    y_encoded = y.replace({
-        -1:0,
-        0:1,
-        1:2
-    })
+    y_encoded = y.replace({-1:0, 0:1, 1:2})
 
     if len(y_encoded.unique()) < 2:
         raise ValueError("Not enough signal diversity to train model")
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y_encoded,
-        test_size=0.2,
-        shuffle=False
+        X,y_encoded,test_size=0.2,shuffle=False
     )
 
     model = XGBClassifier(
@@ -174,11 +156,11 @@ def train_model(df):
         num_class=3
     )
 
-    model.fit(X_train, y_train)
+    model.fit(X_train,y_train)
 
     pred = model.predict(X_test)
 
-    acc = accuracy_score(y_test, pred)
+    acc = accuracy_score(y_test,pred)
 
     return model, acc
 
@@ -232,55 +214,9 @@ def fibonacci_levels(df):
 
     return levels
 
+
 #################################################
-# NEW FEATURE: 1 YEAR RETURN ANALYSIS
-#################################################
-
-st.subheader("📅 1 Year Investment Analysis")
-
-selected_date = st.date_input(
-    "Select Investment Date",
-    value=stock["Date"].max().date()
-)
-
-investment = st.number_input(
-    "Investment Amount",
-    value=100000
-)
-
-if st.button("Run 1-Year Analysis"):
-
-    result = one_year_return_analysis(
-        stock,
-        pd.to_datetime(selected_date),
-        model,
-        investment
-    )
-
-    st.write("Start Price:", round(result["start_price"],2))
-    st.write("End Date Used:", result["end_date"].date())
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.metric(
-            "Predicted Portfolio Value",
-            round(result["predicted_value"],2)
-        )
-
-    with col2:
-        st.metric(
-            "Actual Portfolio Value",
-            round(result["actual_value"],2)
-        )
-
-    pred_return = ((result["predicted_value"] - investment)/investment)*100
-    actual_return = ((result["actual_value"] - investment)/investment)*100
-
-    st.write("Predicted Return %:", round(pred_return,2))
-    st.write("Actual Return %:", round(actual_return,2))
-#################################################
-# PLOT
+# CHART
 #################################################
 
 def plot_chart(df):
@@ -297,27 +233,30 @@ def plot_chart(df):
 
     st.plotly_chart(fig, use_container_width=True)
 
+
 #################################################
-# 1 YEAR RETURN PREDICTION FEATURE
+# NEW FEATURE: 1 YEAR RETURN ANALYSIS
 #################################################
 
-def one_year_return_analysis(df, selected_date, model, investment=100000):
+def one_year_return_analysis(df, selected_date, investment=100000):
 
     df = df.sort_values("Date").reset_index(drop=True)
 
-    # Find nearest date
     df["DateDiff"] = abs(df["Date"] - selected_date)
     start_idx = df["DateDiff"].idxmin()
 
-    start_price = df.loc[start_idx, "Close"]
-
-    # Calculate predicted return using signals
-    position = investment / start_price
-    capital = 0
+    start_price = df.loc[start_idx,"Close"]
 
     end_idx = min(start_idx + 252, len(df)-1)
 
-    for i in range(start_idx, end_idx):
+    end_price = df.loc[end_idx,"Close"]
+
+    actual_value = investment * (end_price / start_price)
+
+    capital = investment
+    position = 0
+
+    for i in range(start_idx,end_idx):
 
         signal = df["Prediction"].iloc[i]
         price = df["Close"].iloc[i]
@@ -334,19 +273,9 @@ def one_year_return_analysis(df, selected_date, model, investment=100000):
 
     predicted_value = capital + position * df["Close"].iloc[end_idx]
 
-    # Actual value (buy & hold)
-    actual_price = df["Close"].iloc[end_idx]
-    actual_value = investment * (actual_price / start_price)
+    return start_price,end_price,predicted_value,actual_value,df["Date"].iloc[end_idx]
 
-    end_date = df["Date"].iloc[end_idx]
 
-    return {
-        "start_price": start_price,
-        "end_price": actual_price,
-        "predicted_value": predicted_value,
-        "actual_value": actual_value,
-        "end_date": end_date
-    }
 #################################################
 # MAIN
 #################################################
@@ -370,11 +299,8 @@ if file:
     stock = stock.sort_values("Date")
 
     stock = add_features(stock)
-
     stock = detect_wave3(stock)
-
     stock = detect_divergence(stock)
-
     stock = create_labels(stock)
 
     try:
@@ -395,12 +321,15 @@ if file:
 
     stock["EncodedPrediction"] = model.predict(stock[features].fillna(0))
 
-    # Decode predictions back
     stock["Prediction"] = stock["EncodedPrediction"].replace({
         0:-1,
         1:0,
         2:1
     })
+
+    #################################################
+    # BACKTEST
+    #################################################
 
     st.subheader("Backtest")
 
@@ -408,10 +337,69 @@ if file:
 
     st.write("Final Portfolio Value:", round(final_value,2))
 
+    #################################################
+    # CHART
+    #################################################
+
     st.subheader("Price Chart")
 
     plot_chart(stock)
 
+    #################################################
+    # FIBONACCI
+    #################################################
+
     st.subheader("Fibonacci Levels")
 
     st.write(fibonacci_levels(stock))
+
+    #################################################
+    # 1 YEAR INVESTMENT ANALYSIS
+    #################################################
+
+    st.subheader("📅 1 Year Investment Analysis")
+
+    default_date = stock["Date"].iloc[-1].date()
+
+    selected_date = st.date_input(
+        "Select Investment Date",
+        value=default_date
+    )
+
+    investment = st.number_input(
+        "Investment Amount",
+        value=100000
+    )
+
+    if st.button("Run 1 Year Analysis"):
+
+        start_price,end_price,predicted_value,actual_value,end_date = one_year_return_analysis(
+            stock,
+            pd.to_datetime(selected_date),
+            investment
+        )
+
+        st.write("Start Price:", round(start_price,2))
+        st.write("End Date:", end_date.date())
+
+        col1,col2 = st.columns(2)
+
+        with col1:
+
+            st.metric(
+                "Predicted Portfolio Value",
+                round(predicted_value,2)
+            )
+
+        with col2:
+
+            st.metric(
+                "Actual Portfolio Value",
+                round(actual_value,2)
+            )
+
+        pred_return = ((predicted_value-investment)/investment)*100
+        actual_return = ((actual_value-investment)/investment)*100
+
+        st.write("Predicted Return %:", round(pred_return,2))
+        st.write("Actual Return %:", round(actual_return,2))
