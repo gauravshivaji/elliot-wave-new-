@@ -5,12 +5,9 @@ import plotly.graph_objects as go
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score
-
-from xgboost import XGBClassifier
+from sklearn.metrics import accuracy_score
 
 import ta
-
 
 #############################################
 # FEATURE ENGINEERING
@@ -53,7 +50,9 @@ def zigzag(df, pct=0.03):
             pivots.append(i)
             last_pivot = i
 
-    return df.iloc[pivots]
+    pivot_df = df.iloc[pivots]
+
+    return pivot_df
 
 
 #############################################
@@ -92,88 +91,34 @@ def fibonacci_levels(high,low):
 
 
 #############################################
-# MACHINE LEARNING MODELS
+# MACHINE LEARNING MODEL
 #############################################
 
-def train_models(df):
+def train_model(df):
 
     features = ["RSI","return","volatility"]
 
     X = df[features]
+
     y = df["target"]
 
     X_train,X_test,y_train,y_test = train_test_split(
         X,y,test_size=0.2,shuffle=False
     )
 
-    ###########################
-    # RANDOM FOREST
-    ###########################
+    model = RandomForestClassifier(n_estimators=300)
 
-    rf = RandomForestClassifier(
-        n_estimators=300,
-        random_state=42
-    )
+    model.fit(X_train,y_train)
 
-    rf.fit(X_train,y_train)
+    pred = model.predict(X_test)
 
-    rf_pred = rf.predict(X_test)
+    acc = accuracy_score(y_test,pred)
 
-    ###########################
-    # XGBOOST
-    ###########################
-
-    xgb = XGBClassifier(
-        n_estimators=400,
-        learning_rate=0.05,
-        max_depth=5,
-        eval_metric="logloss"
-    )
-
-    xgb.fit(X_train,y_train)
-
-    xgb_pred = xgb.predict(X_test)
-
-    ###########################
-    # RESULTS
-    ###########################
-
-    results = pd.DataFrame({
-
-        "Model":[
-            "Random Forest",
-            "XGBoost"
-        ],
-
-        "Accuracy":[
-            accuracy_score(y_test,rf_pred),
-            accuracy_score(y_test,xgb_pred)
-        ],
-
-        "Precision":[
-            precision_score(y_test,rf_pred),
-            precision_score(y_test,xgb_pred)
-        ],
-
-        "Recall":[
-            recall_score(y_test,rf_pred),
-            recall_score(y_test,xgb_pred)
-        ]
-
-    })
-
-    best_model_name = results.sort_values(
-        "Accuracy",
-        ascending=False
-    ).iloc[0]["Model"]
-
-    best_model = rf if best_model_name == "Random Forest" else xgb
-
-    return rf,xgb,best_model,results
+    return model,acc
 
 
 #############################################
-# WAVE-3 PROBABILITY
+# WAVE 3 PROBABILITY
 #############################################
 
 def wave3_probability(model,df):
@@ -186,41 +131,27 @@ def wave3_probability(model,df):
 
 
 #############################################
-# BUY / SELL SIGNALS
-#############################################
-
-def signals(pivots):
-
-    if len(pivots) < 6:
-        return None
-
-    wave2 = pivots.iloc[2]
-    waveB = pivots.iloc[-2]
-
-    return wave2,waveB
-
-
-#############################################
-# NIFTY500 WAVE-3 SCREENER
+# NIFTY500 WAVE3 SCREENER
 #############################################
 
 def wave3_screener(data):
 
-    candidates = []
+    results = []
 
     for ticker in data["Ticker"].unique():
 
         df = data[data["Ticker"]==ticker].dropna(subset=["Close"])
 
-        if len(df) < 150:
+        if len(df)<100:
             continue
 
         pivots = zigzag(df)
 
-        if len(pivots) > 6:
-            candidates.append(ticker)
+        if len(pivots)>6:
 
-    return candidates
+            results.append(ticker)
+
+    return results
 
 
 #############################################
@@ -265,15 +196,30 @@ def plot_chart(df,pivots,waves):
 
     fib = fibonacci_levels(high,low)
 
-    for level,val in fib.items():
+    for k,v in fib.items():
 
         fig.add_hline(
-            y=val,
+            y=v,
             line_dash="dash",
-            annotation_text=f"Fib {level}"
+            annotation_text=f"Fib {k}"
         )
 
     return fig
+
+
+#############################################
+# BUY / SELL SIGNALS
+#############################################
+
+def signals(pivots):
+
+    if len(pivots)<6:
+        return None
+
+    wave2 = pivots.iloc[2]
+    waveB = pivots.iloc[-2]
+
+    return wave2,waveB
 
 
 #############################################
@@ -295,17 +241,11 @@ if file:
         sorted(data["Ticker"].dropna().unique())
     )
 
-    df = data[data["Ticker"] == ticker]
+    df = data[data["Ticker"]==ticker]
 
     df = df.dropna(subset=["Close"])
 
     df = df.sort_values("Date")
-
-    if len(df) < 150:
-
-        st.warning("Not enough data for analysis")
-
-        st.stop()
 
     df = add_features(df)
 
@@ -313,13 +253,13 @@ if file:
 
     waves = detect_waves(pivots)
 
-    rf,xgb,best_model,results = train_models(df)
+    model,acc = train_model(df)
 
-    prob = wave3_probability(best_model,df)
+    prob = wave3_probability(model,df)
 
     fig = plot_chart(df,pivots,waves)
 
-    st.subheader("Stock Price with Elliott Waves")
+    st.subheader("Price Chart with Elliott Waves")
 
     st.plotly_chart(fig,use_container_width=True)
 
@@ -327,15 +267,9 @@ if file:
 
     st.metric("Probability",f"{prob*100:.2f}%")
 
-    st.subheader("Model Comparison")
+    st.subheader("ML Model Accuracy")
 
-    st.dataframe(results)
-
-    best = results.sort_values("Accuracy",ascending=False).iloc[0]
-
-    st.success(
-        f"Best Model: {best['Model']} (Accuracy {best['Accuracy']:.2f})"
-    )
+    st.write(acc)
 
     sig = signals(pivots)
 
@@ -351,6 +285,6 @@ if file:
 
         result = wave3_screener(data)
 
-        st.subheader("Stocks Possibly Entering Wave-3")
+        st.write("Stocks likely entering Wave-3")
 
         st.write(result)
