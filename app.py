@@ -10,17 +10,12 @@ from xgboost import XGBClassifier
 
 import ta
 
-###########################################
-# PAGE SETTINGS
-###########################################
-
 st.set_page_config(page_title="AI Trading System", layout="wide")
+st.title("📈 Elliott Wave + RSI Divergence ML System")
 
-st.title("📈 AI Elliott Wave Trading System")
-
-###########################################
+###################################################
 # FEATURE ENGINEERING
-###########################################
+###################################################
 
 def add_features(df):
 
@@ -42,9 +37,9 @@ def add_features(df):
     return df
 
 
-###########################################
-# EXTREMA DETECTION
-###########################################
+###################################################
+# EXTREMA
+###################################################
 
 def detect_extrema(df):
 
@@ -56,9 +51,9 @@ def detect_extrema(df):
     return maxima, minima
 
 
-###########################################
+###################################################
 # WAVE 3 DETECTION
-###########################################
+###################################################
 
 def detect_wave3(df):
 
@@ -80,9 +75,9 @@ def detect_wave3(df):
     return df
 
 
-###########################################
-# DIVERGENCE DETECTION
-###########################################
+###################################################
+# DIVERGENCE
+###################################################
 
 def detect_divergence(df):
 
@@ -114,46 +109,24 @@ def detect_divergence(df):
     return df
 
 
-###########################################
-# FIBONACCI LEVELS
-###########################################
-
-def fibonacci_levels(df):
-
-    high = df["Close"].max()
-    low = df["Close"].min()
-
-    diff = high - low
-
-    levels = {
-        "23.6%": high - diff * 0.236,
-        "38.2%": high - diff * 0.382,
-        "50%": high - diff * 0.5,
-        "61.8%": high - diff * 0.618,
-        "78.6%": high - diff * 0.786
-    }
-
-    return levels
-
-
-###########################################
-# LABEL CREATION
-###########################################
+###################################################
+# LABELS
+###################################################
 
 def create_labels(df):
 
     df["Signal"] = 0
 
-    df.loc[(df["BullishDiv"] == 1) | (df["Wave3"] == 1), "Signal"] = 1
+    df.loc[(df["BullishDiv"] == 1) | (df["RSI"] < 30) | (df["Wave3"] == 1), "Signal"] = 1
 
-    df.loc[df["BearishDiv"] == 1, "Signal"] = -1
+    df.loc[(df["BearishDiv"] == 1) | (df["RSI"] > 70), "Signal"] = -1
 
     return df
 
 
-###########################################
-# TRAIN MODEL
-###########################################
+###################################################
+# MODEL
+###################################################
 
 def train_model(df):
 
@@ -173,18 +146,27 @@ def train_model(df):
     df = df.dropna()
 
     X = df[features]
-    y = df["Signal"]
+    y = df["Signal"].astype(int)
+
+    if len(X) < 100:
+        raise ValueError("Not enough data to train")
+
+    if len(y.unique()) < 2:
+        raise ValueError("Only one class present in Signal")
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
+        X,
+        y,
         test_size=0.2,
         shuffle=False
     )
 
     model = XGBClassifier(
-        n_estimators=400,
+        n_estimators=300,
         learning_rate=0.05,
-        max_depth=6
+        max_depth=6,
+        objective="multi:softmax",
+        num_class=3
     )
 
     model.fit(X_train, y_train)
@@ -196,16 +178,14 @@ def train_model(df):
     return model, acc
 
 
-###########################################
-# BACKTESTING ENGINE
-###########################################
+###################################################
+# BACKTEST
+###################################################
 
 def backtest(df):
 
     capital = 100000
     position = 0
-
-    trades = []
 
     for i in range(len(df)):
 
@@ -216,22 +196,41 @@ def backtest(df):
 
             position = capital / price
             capital = 0
-            trades.append(("BUY", price))
 
         elif signal == -1 and position > 0:
 
             capital = position * price
             position = 0
-            trades.append(("SELL", price))
 
     final_value = capital + position * df["Close"].iloc[-1]
 
-    return final_value, trades
+    return final_value
 
 
-###########################################
-# TOP STOCK SELECTOR
-###########################################
+###################################################
+# FIBONACCI
+###################################################
+
+def fibonacci_levels(df):
+
+    high = df["Close"].max()
+    low = df["Close"].min()
+
+    diff = high - low
+
+    levels = {
+        "23.6%": high - diff * 0.236,
+        "38.2%": high - diff * 0.382,
+        "50%": high - diff * 0.5,
+        "61.8%": high - diff * 0.618
+    }
+
+    return levels
+
+
+###################################################
+# TOP STOCKS
+###################################################
 
 def top_stocks(df, model):
 
@@ -256,14 +255,12 @@ def top_stocks(df, model):
 
     latest["Prediction"] = preds
 
-    buys = latest[latest["Prediction"] == 1]
-
-    return buys.sort_values("RSI").head(10)
+    return latest[latest["Prediction"] == 1].sort_values("RSI").head(10)
 
 
-###########################################
-# PLOT CHART
-###########################################
+###################################################
+# CHART
+###################################################
 
 def plot_chart(df):
 
@@ -280,11 +277,11 @@ def plot_chart(df):
     st.plotly_chart(fig, use_container_width=True)
 
 
-###########################################
-# FILE UPLOAD
-###########################################
+###################################################
+# UPLOAD DATA
+###################################################
 
-file = st.file_uploader("Upload Dataset (Date | Ticker | Close)", type="csv")
+file = st.file_uploader("Upload Dataset", type="csv")
 
 if file:
 
@@ -292,7 +289,6 @@ if file:
 
     df["Date"] = pd.to_datetime(df["Date"])
 
-    st.subheader("Dataset Preview")
     st.dataframe(df.head())
 
     tickers = sorted(df["Ticker"].dropna().unique())
@@ -303,8 +299,6 @@ if file:
 
     stock = stock.sort_values("Date")
 
-    ########################################
-
     stock = add_features(stock)
 
     stock = detect_wave3(stock)
@@ -313,13 +307,16 @@ if file:
 
     stock = create_labels(stock)
 
-    ########################################
+    try:
 
-    model, acc = train_model(stock)
+        model, acc = train_model(stock)
 
-    st.success(f"Model Accuracy: {round(acc*100,2)} %")
+        st.success(f"Model Accuracy: {round(acc*100,2)} %")
 
-    ########################################
+    except Exception as e:
+
+        st.error(str(e))
+        st.stop()
 
     features = [
         "RSI",
@@ -336,32 +333,20 @@ if file:
 
     stock["Prediction"] = model.predict(stock[features].fillna(0))
 
-    ########################################
+    st.subheader("Backtest")
 
-    final_value, trades = backtest(stock)
-
-    st.subheader("Backtest Result")
+    final_value = backtest(stock)
 
     st.write("Final Portfolio Value:", round(final_value,2))
-
-    ########################################
 
     st.subheader("Price Chart")
 
     plot_chart(stock)
 
-    ########################################
-
-    fib = fibonacci_levels(stock)
-
     st.subheader("Fibonacci Levels")
 
-    st.write(fib)
+    st.write(fibonacci_levels(stock))
 
-    ########################################
+    st.subheader("Top Stocks to Buy")
 
-    best = top_stocks(df, model)
-
-    st.subheader("Top 10 Stocks to Buy Today")
-
-    st.dataframe(best)
+    st.dataframe(top_stocks(df, model))
