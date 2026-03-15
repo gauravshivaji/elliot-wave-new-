@@ -13,7 +13,7 @@ import ta
 
 
 ############################################
-# LOAD DATASET (AUTO FORMAT DETECTION)
+# LOAD DATASET
 ############################################
 
 def load_dataset(file):
@@ -24,12 +24,12 @@ def load_dataset(file):
     if "Date" not in df.columns:
         df.rename(columns={df.columns[0]: "Date"}, inplace=True)
 
-    # safe date parsing
+    # convert date safely
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
     df = df.dropna(subset=["Date"])
 
-    # convert wide format → long format
+    # convert wide → long format
     if "Stock" not in df.columns:
 
         df = df.melt(
@@ -37,6 +37,9 @@ def load_dataset(file):
             var_name="Stock",
             value_name="Close"
         )
+
+    # ensure numeric prices
+    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
 
     df = df.dropna()
 
@@ -76,6 +79,9 @@ def add_features(df):
 
 def detect_pivots(df):
 
+    if len(df) < 50:
+        return pd.DataFrame()
+
     order = 25
 
     highs = argrelextrema(
@@ -103,6 +109,9 @@ def detect_elliott(pivots):
 
     cycles = []
 
+    if len(pivots) < 6:
+        return cycles
+
     prices = pivots["Close"].values
 
     for i in range(len(prices)-5):
@@ -129,7 +138,6 @@ def detect_elliott(pivots):
         cond4 = r5 > 0.5
 
         if cond1 and cond2 and cond3 and cond4:
-
             cycles.append((i,i+5))
 
     return cycles
@@ -140,6 +148,9 @@ def detect_elliott(pivots):
 ############################################
 
 def train_models(df):
+
+    if len(df) < 100:
+        return None
 
     features = ["RSI","Fib_Ratio","Return"]
 
@@ -153,36 +164,31 @@ def train_models(df):
         shuffle=False
     )
 
-    ###################################
+    ################################
     # Random Forest
-    ###################################
+    ################################
 
     rf = RandomForestClassifier(n_estimators=300)
-
     rf.fit(X_train,y_train)
 
     rf_pred = rf.predict(X_test)
 
-    ###################################
+    ################################
     # XGBoost
-    ###################################
+    ################################
 
     xgb = XGBClassifier(n_estimators=400)
-
     xgb.fit(X_train,y_train)
 
     xgb_pred = xgb.predict(X_test)
 
-    ###################################
-    # Model Comparison
-    ###################################
+    ################################
+    # comparison table
+    ################################
 
     results = pd.DataFrame({
 
-        "Model":[
-            "Random Forest",
-            "XGBoost"
-        ],
+        "Model":["Random Forest","XGBoost"],
 
         "Accuracy":[
             accuracy_score(y_test,rf_pred),
@@ -205,7 +211,7 @@ def train_models(df):
 
 
 ############################################
-# PLOT CHART
+# PLOT
 ############################################
 
 def plot_chart(df,pivots,cycles):
@@ -221,14 +227,16 @@ def plot_chart(df,pivots,cycles):
         )
     )
 
-    fig.add_trace(
-        go.Scatter(
-            x=pivots["Date"],
-            y=pivots["Close"],
-            mode="markers",
-            name="Pivots"
+    if len(pivots) > 0:
+
+        fig.add_trace(
+            go.Scatter(
+                x=pivots["Date"],
+                y=pivots["Close"],
+                mode="markers",
+                name="Pivots"
+            )
         )
-    )
 
     for c in cycles:
 
@@ -259,19 +267,25 @@ if uploaded:
     df = load_dataset(uploaded)
 
     st.subheader("Dataset Preview")
-
     st.dataframe(df.head())
 
-    stock = st.selectbox(
-        "Select Stock",
-        df["Stock"].unique()
-    )
+    stocks = df["Stock"].unique()
+
+    if len(stocks) == 0:
+        st.error("No stocks detected in dataset.")
+        st.stop()
+
+    stock = st.selectbox("Select Stock", stocks)
 
     df_stock = df[df["Stock"] == stock]
 
     df_stock = df_stock.sort_values("Date")
 
     df_stock = add_features(df_stock)
+
+    if len(df_stock) < 100:
+        st.warning("Not enough data for model training.")
+        st.stop()
 
     pivots = detect_pivots(df_stock)
 
@@ -282,19 +296,20 @@ if uploaded:
     fig = plot_chart(df_stock,pivots,cycles)
 
     st.subheader("Stock Price with Elliott Waves")
-
     st.plotly_chart(fig,use_container_width=True)
 
     st.subheader("Model Comparison")
 
-    st.dataframe(results)
+    if results is not None:
 
-    best = results.sort_values(
-        "Accuracy",
-        ascending=False
-    ).iloc[0]
+        st.dataframe(results)
 
-    st.success(
-        f"Best Model: {best['Model']} "
-        f"(Accuracy {best['Accuracy']:.2f})"
-    )
+        best = results.sort_values(
+            "Accuracy",
+            ascending=False
+        ).iloc[0]
+
+        st.success(
+            f"Best Model: {best['Model']} "
+            f"(Accuracy {best['Accuracy']:.2f})"
+        )
