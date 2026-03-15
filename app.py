@@ -1,292 +1,367 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy.signal import argrelextrema
 import plotly.graph_objects as go
 
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score
+from scipy.signal import argrelextrema
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 from xgboost import XGBClassifier
 
 import ta
 
+###########################################
+# PAGE SETTINGS
+###########################################
 
-#############################################
+st.set_page_config(page_title="AI Trading System", layout="wide")
+
+st.title("📈 AI Elliott Wave Trading System")
+
+###########################################
 # FEATURE ENGINEERING
-#############################################
+###########################################
 
 def add_features(df):
 
-    df["RSI"] = ta.momentum.RSIIndicator(
-        df["Close"], window=14
-    ).rsi()
+    df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
 
-    df["return"] = df["Close"].pct_change()
+    macd = ta.trend.MACD(df["Close"])
+    df["MACD"] = macd.macd()
+    df["MACD_signal"] = macd.macd_signal()
 
-    df["fib_ratio"] = (
-        df["Close"] - df["Close"].rolling(30).min()
-    ) / (
-        df["Close"].rolling(30).max()
-        - df["Close"].rolling(30).min()
-    )
+    df["MA20"] = df["Close"].rolling(20).mean()
+    df["MA50"] = df["Close"].rolling(50).mean()
 
-    df["target"] = (df["Close"].shift(-5) > df["Close"]).astype(int)
+    df["Return"] = df["Close"].pct_change()
 
-    df = df.dropna()
+    df["Momentum"] = df["Close"] - df["Close"].shift(10)
+
+    df["Volatility"] = df["Return"].rolling(20).std()
 
     return df
 
 
-#############################################
-# PIVOT DETECTION
-#############################################
+###########################################
+# EXTREMA DETECTION
+###########################################
 
-def detect_pivots(df):
+def detect_extrema(df):
 
-    order = 25
+    price = df["Close"].values
 
-    highs = argrelextrema(
-        df["Close"].values,
-        np.greater,
-        order=order
-    )[0]
+    maxima = argrelextrema(price, np.greater, order=5)[0]
+    minima = argrelextrema(price, np.less, order=5)[0]
 
-    lows = argrelextrema(
-        df["Close"].values,
-        np.less,
-        order=order
-    )[0]
-
-    pivots = sorted(list(highs) + list(lows))
-
-    pivot_df = df.iloc[pivots]
-
-    return pivot_df
+    return maxima, minima
 
 
-#############################################
-# ELLIOTT WAVE DETECTION
-#############################################
+###########################################
+# WAVE 3 DETECTION
+###########################################
 
-def detect_elliott(pivots):
+def detect_wave3(df):
 
-    cycles = []
+    maxima, minima = detect_extrema(df)
 
-    prices = pivots["Close"].values
+    waves = sorted(list(maxima) + list(minima))
 
-    for i in range(len(prices)-7):
+    df["Wave3"] = 0
 
-        p1,p2,p3,p4,p5,p6,p7,p8 = prices[i:i+8]
+    for i in range(4, len(waves)):
 
-        w1 = p2 - p1
-        w2 = p3 - p2
-        w3 = p4 - p3
-        w4 = p5 - p4
-        w5 = p6 - p5
-        wA = p7 - p6
-        wB = p8 - p7
+        p1, p2, p3, p4, p5 = waves[i-4:i+1]
 
-        if w1 == 0:
-            continue
+        if df["Close"].iloc[p3] > df["Close"].iloc[p1] and \
+           df["Close"].iloc[p5] > df["Close"].iloc[p3]:
 
-        r2 = abs(w2/w1)
-        r3 = abs(w3/w1)
-        r4 = abs(w4/w3) if w3 != 0 else 0
-        r5 = abs(w5/w1)
+            df.loc[df.index[p3], "Wave3"] = 1
 
-        cond1 = 0.4 < r2 < 0.8
-        cond2 = r3 > 1.2
-        cond3 = 0.2 < r4 < 0.6
-        cond4 = r5 > 0.4
-
-        if cond1 and cond2 and cond3 and cond4:
-
-            cycles.append((i,i+7))
-
-    return cycles
+    return df
 
 
-#############################################
-# MODEL TRAINING
-#############################################
+###########################################
+# DIVERGENCE DETECTION
+###########################################
 
-def train_models(df):
+def detect_divergence(df):
 
-    features = ["RSI","fib_ratio","return"]
+    df["BullishDiv"] = 0
+    df["BearishDiv"] = 0
+
+    maxima, minima = detect_extrema(df)
+
+    for i in range(1, len(minima)):
+
+        p1 = minima[i-1]
+        p2 = minima[i]
+
+        if df["Close"].iloc[p2] < df["Close"].iloc[p1] and \
+           df["RSI"].iloc[p2] > df["RSI"].iloc[p1]:
+
+            df.loc[df.index[p2], "BullishDiv"] = 1
+
+    for i in range(1, len(maxima)):
+
+        p1 = maxima[i-1]
+        p2 = maxima[i]
+
+        if df["Close"].iloc[p2] > df["Close"].iloc[p1] and \
+           df["RSI"].iloc[p2] < df["RSI"].iloc[p1]:
+
+            df.loc[df.index[p2], "BearishDiv"] = 1
+
+    return df
+
+
+###########################################
+# FIBONACCI LEVELS
+###########################################
+
+def fibonacci_levels(df):
+
+    high = df["Close"].max()
+    low = df["Close"].min()
+
+    diff = high - low
+
+    levels = {
+        "23.6%": high - diff * 0.236,
+        "38.2%": high - diff * 0.382,
+        "50%": high - diff * 0.5,
+        "61.8%": high - diff * 0.618,
+        "78.6%": high - diff * 0.786
+    }
+
+    return levels
+
+
+###########################################
+# LABEL CREATION
+###########################################
+
+def create_labels(df):
+
+    df["Signal"] = 0
+
+    df.loc[(df["BullishDiv"] == 1) | (df["Wave3"] == 1), "Signal"] = 1
+
+    df.loc[df["BearishDiv"] == 1, "Signal"] = -1
+
+    return df
+
+
+###########################################
+# TRAIN MODEL
+###########################################
+
+def train_model(df):
+
+    features = [
+        "RSI",
+        "MACD",
+        "MACD_signal",
+        "MA20",
+        "MA50",
+        "Momentum",
+        "Volatility",
+        "Wave3",
+        "BullishDiv",
+        "BearishDiv"
+    ]
+
+    df = df.dropna()
 
     X = df[features]
-    y = df["target"]
+    y = df["Signal"]
 
-    X_train,X_test,y_train,y_test = train_test_split(
-        X,y,test_size=0.2,shuffle=False
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=0.2,
+        shuffle=False
     )
 
-    rf = RandomForestClassifier(
-        n_estimators=300
-    )
-
-    rf.fit(X_train,y_train)
-
-    rf_pred = rf.predict(X_test)
-
-    xgb = XGBClassifier(
+    model = XGBClassifier(
         n_estimators=400,
-        eval_metric="logloss"
+        learning_rate=0.05,
+        max_depth=6
     )
 
-    xgb.fit(X_train,y_train)
+    model.fit(X_train, y_train)
 
-    xgb_pred = xgb.predict(X_test)
+    pred = model.predict(X_test)
 
-    results = pd.DataFrame({
+    acc = accuracy_score(y_test, pred)
 
-        "Model":[
-            "Random Forest",
-            "XGBoost"
-        ],
-
-        "Accuracy":[
-            accuracy_score(y_test,rf_pred),
-            accuracy_score(y_test,xgb_pred)
-        ],
-
-        "Precision":[
-            precision_score(y_test,rf_pred,zero_division=0),
-            precision_score(y_test,xgb_pred,zero_division=0)
-        ],
-
-        "Recall":[
-            recall_score(y_test,rf_pred,zero_division=0),
-            recall_score(y_test,xgb_pred,zero_division=0)
-        ]
-    })
-
-    return rf,xgb,results
+    return model, acc
 
 
-#############################################
-# PLOT CHART WITH WAVE LABELS
-#############################################
+###########################################
+# BACKTESTING ENGINE
+###########################################
 
-def plot_chart(df,pivots,cycles):
+def backtest(df):
+
+    capital = 100000
+    position = 0
+
+    trades = []
+
+    for i in range(len(df)):
+
+        signal = df["Prediction"].iloc[i]
+        price = df["Close"].iloc[i]
+
+        if signal == 1 and position == 0:
+
+            position = capital / price
+            capital = 0
+            trades.append(("BUY", price))
+
+        elif signal == -1 and position > 0:
+
+            capital = position * price
+            position = 0
+            trades.append(("SELL", price))
+
+    final_value = capital + position * df["Close"].iloc[-1]
+
+    return final_value, trades
+
+
+###########################################
+# TOP STOCK SELECTOR
+###########################################
+
+def top_stocks(df, model):
+
+    features = [
+        "RSI",
+        "MACD",
+        "MACD_signal",
+        "MA20",
+        "MA50",
+        "Momentum",
+        "Volatility",
+        "Wave3",
+        "BullishDiv",
+        "BearishDiv"
+    ]
+
+    latest = df.groupby("Ticker").tail(1)
+
+    latest = latest.dropna()
+
+    preds = model.predict(latest[features])
+
+    latest["Prediction"] = preds
+
+    buys = latest[latest["Prediction"] == 1]
+
+    return buys.sort_values("RSI").head(10)
+
+
+###########################################
+# PLOT CHART
+###########################################
+
+def plot_chart(df):
 
     fig = go.Figure()
 
-    fig.add_trace(
-        go.Scatter(
-            x=df["Date"],
-            y=df["Close"],
-            mode="lines",
-            name="Price"
-        )
-    )
+    fig.add_trace(go.Scatter(
+        x=df["Date"],
+        y=df["Close"],
+        name="Price"
+    ))
 
-    fig.add_trace(
-        go.Scatter(
-            x=pivots["Date"],
-            y=pivots["Close"],
-            mode="markers",
-            marker=dict(size=8,color="red"),
-            name="Pivots"
-        )
-    )
+    fig.update_layout(height=600)
 
-    wave_labels = ["1","2","3","4","5","A","B","C"]
-
-    for c in cycles:
-
-        wave_points = pivots.iloc[c[0]:c[1]+1]
-
-        fig.add_trace(
-            go.Scatter(
-                x=wave_points["Date"],
-                y=wave_points["Close"],
-                mode="lines+markers",
-                name="Elliott Wave"
-            )
-        )
-
-        for i,(x,y) in enumerate(zip(wave_points["Date"],wave_points["Close"])):
-
-            if i < len(wave_labels):
-
-                fig.add_annotation(
-                    x=x,
-                    y=y,
-                    text=wave_labels[i],
-                    showarrow=True,
-                    arrowhead=2,
-                    ax=0,
-                    ay=-30,
-                    font=dict(size=14,color="black"),
-                    bgcolor="white"
-                )
-
-    return fig
+    st.plotly_chart(fig, use_container_width=True)
 
 
-#############################################
-# STREAMLIT DASHBOARD
-#############################################
+###########################################
+# FILE UPLOAD
+###########################################
 
-st.title("📈 Elliott Wave + Fibonacci ML Dashboard")
-
-file = st.file_uploader("Upload 6 Year Stock Dataset")
+file = st.file_uploader("Upload Dataset (Date | Ticker | Close)", type="csv")
 
 if file:
 
     df = pd.read_csv(file)
 
-    required_cols = ["Date","Ticker","Close"]
-
-    if not all(col in df.columns for col in required_cols):
-
-        st.error("Dataset must contain Date, Ticker, Close columns.")
-        st.stop()
-
     df["Date"] = pd.to_datetime(df["Date"])
 
-    stock = st.selectbox(
-        "Select Stock",
-        sorted(df["Ticker"].dropna().unique())
-    )
+    st.subheader("Dataset Preview")
+    st.dataframe(df.head())
 
-    df = df[df["Ticker"] == stock]
+    tickers = sorted(df["Ticker"].dropna().unique())
 
-    df = df.dropna(subset=["Close"])
+    ticker = st.selectbox("Select Stock", tickers)
 
-    df = df.sort_values("Date")
+    stock = df[df["Ticker"] == ticker].copy()
 
-    if len(df) < 100:
+    stock = stock.sort_values("Date")
 
-        st.warning("Not enough data for analysis.")
-        st.stop()
+    ########################################
 
-    df = add_features(df)
+    stock = add_features(stock)
 
-    pivots = detect_pivots(df)
+    stock = detect_wave3(stock)
 
-    cycles = detect_elliott(pivots)
+    stock = detect_divergence(stock)
 
-    rf,xgb,results = train_models(df)
+    stock = create_labels(stock)
 
-    fig = plot_chart(df,pivots,cycles)
+    ########################################
 
-    st.subheader("Stock Price with Elliott Waves")
+    model, acc = train_model(stock)
 
-    st.plotly_chart(fig,use_container_width=True)
+    st.success(f"Model Accuracy: {round(acc*100,2)} %")
 
-    st.subheader("Model Comparison")
+    ########################################
 
-    st.dataframe(results)
+    features = [
+        "RSI",
+        "MACD",
+        "MACD_signal",
+        "MA20",
+        "MA50",
+        "Momentum",
+        "Volatility",
+        "Wave3",
+        "BullishDiv",
+        "BearishDiv"
+    ]
 
-    best_model = results.sort_values(
-        "Accuracy",
-        ascending=False
-    ).iloc[0]
+    stock["Prediction"] = model.predict(stock[features].fillna(0))
 
-    st.success(
-        f"Best Model: {best_model['Model']} "
-        f"(Accuracy {best_model['Accuracy']:.2f})"
-    )
+    ########################################
+
+    final_value, trades = backtest(stock)
+
+    st.subheader("Backtest Result")
+
+    st.write("Final Portfolio Value:", round(final_value,2))
+
+    ########################################
+
+    st.subheader("Price Chart")
+
+    plot_chart(stock)
+
+    ########################################
+
+    fib = fibonacci_levels(stock)
+
+    st.subheader("Fibonacci Levels")
+
+    st.write(fib)
+
+    ########################################
+
+    best = top_stocks(df, model)
+
+    st.subheader("Top 10 Stocks to Buy Today")
+
+    st.dataframe(best)
