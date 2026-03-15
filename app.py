@@ -13,9 +13,9 @@ import ta
 st.set_page_config(page_title="AI Trading System", layout="wide")
 st.title("📈 Elliott Wave + RSI Divergence ML System")
 
-###################################################
+#################################################
 # FEATURE ENGINEERING
-###################################################
+#################################################
 
 def add_features(df):
 
@@ -37,9 +37,9 @@ def add_features(df):
     return df
 
 
-###################################################
+#################################################
 # EXTREMA
-###################################################
+#################################################
 
 def detect_extrema(df):
 
@@ -51,9 +51,9 @@ def detect_extrema(df):
     return maxima, minima
 
 
-###################################################
+#################################################
 # WAVE 3 DETECTION
-###################################################
+#################################################
 
 def detect_wave3(df):
 
@@ -75,9 +75,9 @@ def detect_wave3(df):
     return df
 
 
-###################################################
+#################################################
 # DIVERGENCE
-###################################################
+#################################################
 
 def detect_divergence(df):
 
@@ -109,9 +109,9 @@ def detect_divergence(df):
     return df
 
 
-###################################################
-# LABELS
-###################################################
+#################################################
+# CREATE LABELS
+#################################################
 
 def create_labels(df):
 
@@ -124,9 +124,9 @@ def create_labels(df):
     return df
 
 
-###################################################
+#################################################
 # MODEL
-###################################################
+#################################################
 
 def train_model(df):
 
@@ -146,17 +146,22 @@ def train_model(df):
     df = df.dropna()
 
     X = df[features]
-    y = df["Signal"].astype(int)
 
-    if len(X) < 100:
-        raise ValueError("Not enough data to train")
+    y = df["Signal"]
 
-    if len(y.unique()) < 2:
-        raise ValueError("Only one class present in Signal")
+    # Encode labels
+    y_encoded = y.replace({
+        -1:0,
+        0:1,
+        1:2
+    })
+
+    if len(y_encoded.unique()) < 2:
+        raise ValueError("Not enough signal diversity to train model")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
-        y,
+        y_encoded,
         test_size=0.2,
         shuffle=False
     )
@@ -178,9 +183,9 @@ def train_model(df):
     return model, acc
 
 
-###################################################
+#################################################
 # BACKTEST
-###################################################
+#################################################
 
 def backtest(df):
 
@@ -207,9 +212,9 @@ def backtest(df):
     return final_value
 
 
-###################################################
+#################################################
 # FIBONACCI
-###################################################
+#################################################
 
 def fibonacci_levels(df):
 
@@ -228,39 +233,9 @@ def fibonacci_levels(df):
     return levels
 
 
-###################################################
-# TOP STOCKS
-###################################################
-
-def top_stocks(df, model):
-
-    features = [
-        "RSI",
-        "MACD",
-        "MACD_signal",
-        "MA20",
-        "MA50",
-        "Momentum",
-        "Volatility",
-        "Wave3",
-        "BullishDiv",
-        "BearishDiv"
-    ]
-
-    latest = df.groupby("Ticker").tail(1)
-
-    latest = latest.dropna()
-
-    preds = model.predict(latest[features])
-
-    latest["Prediction"] = preds
-
-    return latest[latest["Prediction"] == 1].sort_values("RSI").head(10)
-
-
-###################################################
-# CHART
-###################################################
+#################################################
+# PLOT
+#################################################
 
 def plot_chart(df):
 
@@ -277,9 +252,9 @@ def plot_chart(df):
     st.plotly_chart(fig, use_container_width=True)
 
 
-###################################################
-# UPLOAD DATA
-###################################################
+#################################################
+# MAIN
+#################################################
 
 file = st.file_uploader("Upload Dataset", type="csv")
 
@@ -319,19 +294,18 @@ if file:
         st.stop()
 
     features = [
-        "RSI",
-        "MACD",
-        "MACD_signal",
-        "MA20",
-        "MA50",
-        "Momentum",
-        "Volatility",
-        "Wave3",
-        "BullishDiv",
-        "BearishDiv"
+        "RSI","MACD","MACD_signal","MA20","MA50",
+        "Momentum","Volatility","Wave3","BullishDiv","BearishDiv"
     ]
 
-    stock["Prediction"] = model.predict(stock[features].fillna(0))
+    stock["EncodedPrediction"] = model.predict(stock[features].fillna(0))
+
+    # Decode predictions back
+    stock["Prediction"] = stock["EncodedPrediction"].replace({
+        0:-1,
+        1:0,
+        2:1
+    })
 
     st.subheader("Backtest")
 
@@ -346,7 +320,3 @@ if file:
     st.subheader("Fibonacci Levels")
 
     st.write(fibonacci_levels(stock))
-
-    st.subheader("Top Stocks to Buy")
-
-    st.dataframe(top_stocks(df, model))
