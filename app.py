@@ -11,6 +11,35 @@ from xgboost import XGBClassifier
 
 import ta
 
+
+#############################################
+# DATA LOADING (SUPPORTS WIDE + LONG FORMAT)
+#############################################
+
+def load_dataset(file):
+
+    df = pd.read_csv(file)
+
+    # Rename first column to Date if needed
+    if "Date" not in df.columns:
+        df.rename(columns={df.columns[0]: "Date"}, inplace=True)
+
+    df["Date"] = pd.to_datetime(df["Date"])
+
+    # Convert wide format → long format
+    if "Stock" not in df.columns:
+
+        df = df.melt(
+            id_vars=["Date"],
+            var_name="Stock",
+            value_name="Close"
+        )
+
+    df = df.dropna()
+
+    return df
+
+
 #############################################
 # FEATURE ENGINEERING
 #############################################
@@ -105,7 +134,7 @@ def detect_elliott(pivots):
 
 
 #############################################
-# MODEL TRAINING
+# TRAIN TWO ML MODELS
 #############################################
 
 def train_models(df):
@@ -119,6 +148,10 @@ def train_models(df):
         X,y,test_size=0.2,shuffle=False
     )
 
+    #################################
+    # Random Forest
+    #################################
+
     rf = RandomForestClassifier(
         n_estimators=300
     )
@@ -127,6 +160,10 @@ def train_models(df):
 
     rf_pred = rf.predict(X_test)
 
+    #################################
+    # XGBoost
+    #################################
+
     xgb = XGBClassifier(
         n_estimators=400
     )
@@ -134,6 +171,10 @@ def train_models(df):
     xgb.fit(X_train,y_train)
 
     xgb_pred = xgb.predict(X_test)
+
+    #################################
+    # Comparison table
+    #################################
 
     results = pd.DataFrame({
 
@@ -209,54 +250,47 @@ def plot_chart(df,pivots,cycles):
 
 st.title("📈 Elliott Wave + Fibonacci ML Dashboard")
 
-file = st.file_uploader("Upload 6 Year Stock Dataset")
+file = st.file_uploader("Upload 6-Year Stock Dataset")
 
 if file:
 
-    df = pd.read_csv(file)
+    df = load_dataset(file)
 
-# If Date column not found, assume first column is Date
-    if "Date" not in df.columns:
-        df.rename(columns={df.columns[0]: "Date"}, inplace=True)
-
-    df["Date"] = pd.to_datetime(df["Date"])
-
-# Convert wide format → long format
-    if "Stock" not in df.columns:
-        df = df.melt(
-        id_vars=["Date"],
-        var_name="Stock",
-        value_name="Close"
-    )
-
-    df = df.dropna()
+    st.write("Dataset Loaded")
+    st.write(df.head())
 
     stock = st.selectbox(
         "Select Stock",
         df["Stock"].unique()
     )
 
-    df = df[df["Stock"] == stock]
+    df_stock = df[df["Stock"] == stock]
 
-    df = df.sort_values("Date")
+    df_stock = df_stock.sort_values("Date")
 
-    df = add_features(df)
+    df_stock = add_features(df_stock)
 
-    pivots = detect_pivots(df)
+    pivots = detect_pivots(df_stock)
 
     cycles = detect_elliott(pivots)
 
-    rf,xgb,results = train_models(df)
+    rf,xgb,results = train_models(df_stock)
 
-    fig = plot_chart(df,pivots,cycles)
+    #################################
+
+    fig = plot_chart(df_stock,pivots,cycles)
 
     st.subheader("Stock Price with Elliott Waves")
 
     st.plotly_chart(fig,use_container_width=True)
 
+    #################################
+
     st.subheader("Model Comparison")
 
     st.dataframe(results)
+
+    #################################
 
     best_model = results.sort_values(
         "Accuracy",
