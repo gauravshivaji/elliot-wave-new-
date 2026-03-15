@@ -11,6 +11,7 @@ from xgboost import XGBClassifier
 
 import ta
 
+
 #############################################
 # FEATURE ENGINEERING
 #############################################
@@ -128,7 +129,8 @@ def train_models(df):
     rf_pred = rf.predict(X_test)
 
     xgb = XGBClassifier(
-        n_estimators=400
+        n_estimators=400,
+        eval_metric="logloss"
     )
 
     xgb.fit(X_train,y_train)
@@ -215,16 +217,31 @@ if file:
 
     df = pd.read_csv(file)
 
+    # Check required columns
+    required_cols = ["Date","Ticker","Close"]
+
+    if not all(col in df.columns for col in required_cols):
+        st.error("Dataset must contain Date, Ticker, Close columns.")
+        st.stop()
+
     df["Date"] = pd.to_datetime(df["Date"])
 
+    # Select stock
     stock = st.selectbox(
         "Select Stock",
-        df["Stock"].unique()
+        sorted(df["Ticker"].dropna().unique())
     )
 
-    df = df[df["Stock"] == stock]
+    df = df[df["Ticker"] == stock]
+
+    # Remove missing prices
+    df = df.dropna(subset=["Close"])
 
     df = df.sort_values("Date")
+
+    if len(df) < 100:
+        st.warning("Not enough data for analysis.")
+        st.stop()
 
     df = add_features(df)
 
