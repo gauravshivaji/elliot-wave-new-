@@ -75,15 +75,17 @@ def detect_elliott(pivots):
 
     prices = pivots["Close"].values
 
-    for i in range(len(prices)-5):
+    for i in range(len(prices)-7):
 
-        p1,p2,p3,p4,p5,p6 = prices[i:i+6]
+        p1,p2,p3,p4,p5,p6,p7,p8 = prices[i:i+8]
 
         w1 = p2 - p1
         w2 = p3 - p2
         w3 = p4 - p3
         w4 = p5 - p4
         w5 = p6 - p5
+        wA = p7 - p6
+        wB = p8 - p7
 
         if w1 == 0:
             continue
@@ -93,14 +95,14 @@ def detect_elliott(pivots):
         r4 = abs(w4/w3) if w3 != 0 else 0
         r5 = abs(w5/w1)
 
-        cond1 = 0.4 < r2 < 0.7
-        cond2 = r3 > 1.3
-        cond3 = 0.2 < r4 < 0.5
-        cond4 = r5 > 0.5
+        cond1 = 0.4 < r2 < 0.8
+        cond2 = r3 > 1.2
+        cond3 = 0.2 < r4 < 0.6
+        cond4 = r5 > 0.4
 
         if cond1 and cond2 and cond3 and cond4:
 
-            cycles.append((i,i+5))
+            cycles.append((i,i+7))
 
     return cycles
 
@@ -150,13 +152,13 @@ def train_models(df):
         ],
 
         "Precision":[
-            precision_score(y_test,rf_pred),
-            precision_score(y_test,xgb_pred)
+            precision_score(y_test,rf_pred,zero_division=0),
+            precision_score(y_test,xgb_pred,zero_division=0)
         ],
 
         "Recall":[
-            recall_score(y_test,rf_pred),
-            recall_score(y_test,xgb_pred)
+            recall_score(y_test,rf_pred,zero_division=0),
+            recall_score(y_test,xgb_pred,zero_division=0)
         ]
     })
 
@@ -164,7 +166,7 @@ def train_models(df):
 
 
 #############################################
-# PLOT CHART
+# PLOT CHART WITH WAVE LABELS
 #############################################
 
 def plot_chart(df,pivots,cycles):
@@ -185,9 +187,12 @@ def plot_chart(df,pivots,cycles):
             x=pivots["Date"],
             y=pivots["Close"],
             mode="markers",
+            marker=dict(size=8,color="red"),
             name="Pivots"
         )
     )
+
+    wave_labels = ["1","2","3","4","5","A","B","C"]
 
     for c in cycles:
 
@@ -198,9 +203,25 @@ def plot_chart(df,pivots,cycles):
                 x=wave_points["Date"],
                 y=wave_points["Close"],
                 mode="lines+markers",
-                name="Elliott Cycle"
+                name="Elliott Wave"
             )
         )
+
+        for i,(x,y) in enumerate(zip(wave_points["Date"],wave_points["Close"])):
+
+            if i < len(wave_labels):
+
+                fig.add_annotation(
+                    x=x,
+                    y=y,
+                    text=wave_labels[i],
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=0,
+                    ay=-30,
+                    font=dict(size=14,color="black"),
+                    bgcolor="white"
+                )
 
     return fig
 
@@ -217,16 +238,15 @@ if file:
 
     df = pd.read_csv(file)
 
-    # Check required columns
     required_cols = ["Date","Ticker","Close"]
 
     if not all(col in df.columns for col in required_cols):
+
         st.error("Dataset must contain Date, Ticker, Close columns.")
         st.stop()
 
     df["Date"] = pd.to_datetime(df["Date"])
 
-    # Select stock
     stock = st.selectbox(
         "Select Stock",
         sorted(df["Ticker"].dropna().unique())
@@ -234,12 +254,12 @@ if file:
 
     df = df[df["Ticker"] == stock]
 
-    # Remove missing prices
     df = df.dropna(subset=["Close"])
 
     df = df.sort_values("Date")
 
     if len(df) < 100:
+
         st.warning("Not enough data for analysis.")
         st.stop()
 
