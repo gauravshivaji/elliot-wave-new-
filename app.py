@@ -13,32 +13,41 @@ import ta
 
 
 ############################################
-# LOAD DATASET
+# DATA LOADER (AUTO DETECT FORMAT)
 ############################################
 
 def load_dataset(file):
 
     df = pd.read_csv(file)
 
-    # ensure first column is Date
+    # If Date column missing assume first column is date
     if "Date" not in df.columns:
-        df.rename(columns={df.columns[0]: "Date"}, inplace=True)
+        first_col = df.columns[0]
+        df.rename(columns={first_col: "Date"}, inplace=True)
 
-    # convert date safely
+    # Convert to datetime safely
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
     df = df.dropna(subset=["Date"])
 
-    # convert wide → long format
-    if "Stock" not in df.columns:
+    # If dataset already long format
+    if "Stock" in df.columns and "Close" in df.columns:
 
-        df = df.melt(
-            id_vars=["Date"],
-            var_name="Stock",
-            value_name="Close"
-        )
+        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+        df = df.dropna()
 
-    # ensure numeric prices
+        return df
+
+    # Otherwise assume wide format
+    price_columns = [c for c in df.columns if c != "Date"]
+
+    df = df.melt(
+        id_vars=["Date"],
+        value_vars=price_columns,
+        var_name="Stock",
+        value_name="Close"
+    )
+
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
 
     df = df.dropna()
@@ -138,6 +147,7 @@ def detect_elliott(pivots):
         cond4 = r5 > 0.5
 
         if cond1 and cond2 and cond3 and cond4:
+
             cycles.append((i,i+5))
 
     return cycles
@@ -158,33 +168,30 @@ def train_models(df):
     y = df["Target"]
 
     X_train,X_test,y_train,y_test = train_test_split(
-        X,
-        y,
-        test_size=0.2,
-        shuffle=False
+        X,y,test_size=0.2,shuffle=False
     )
 
-    ################################
+    ###################################
     # Random Forest
-    ################################
+    ###################################
 
     rf = RandomForestClassifier(n_estimators=300)
     rf.fit(X_train,y_train)
 
     rf_pred = rf.predict(X_test)
 
-    ################################
+    ###################################
     # XGBoost
-    ################################
+    ###################################
 
     xgb = XGBClassifier(n_estimators=400)
     xgb.fit(X_train,y_train)
 
     xgb_pred = xgb.predict(X_test)
 
-    ################################
-    # comparison table
-    ################################
+    ###################################
+    # Comparison
+    ###################################
 
     results = pd.DataFrame({
 
@@ -211,7 +218,7 @@ def train_models(df):
 
 
 ############################################
-# PLOT
+# PLOT CHART
 ############################################
 
 def plot_chart(df,pivots,cycles):
@@ -269,47 +276,54 @@ if uploaded:
     st.subheader("Dataset Preview")
     st.dataframe(df.head())
 
+    st.write("Stocks detected:", df["Stock"].nunique())
+
     stocks = df["Stock"].unique()
 
     if len(stocks) == 0:
-        st.error("No stocks detected in dataset.")
-        st.stop()
 
-    stock = st.selectbox("Select Stock", stocks)
+        st.error("No stocks detected in dataset")
 
-    df_stock = df[df["Stock"] == stock]
+    else:
 
-    df_stock = df_stock.sort_values("Date")
+        stock = st.selectbox("Select Stock", stocks)
 
-    df_stock = add_features(df_stock)
+        df_stock = df[df["Stock"] == stock]
 
-    if len(df_stock) < 100:
-        st.warning("Not enough data for model training.")
-        st.stop()
+        df_stock = df_stock.sort_values("Date")
 
-    pivots = detect_pivots(df_stock)
+        df_stock = add_features(df_stock)
 
-    cycles = detect_elliott(pivots)
+        if len(df_stock) < 100:
 
-    results = train_models(df_stock)
+            st.warning("Not enough data to train model")
 
-    fig = plot_chart(df_stock,pivots,cycles)
+        else:
 
-    st.subheader("Stock Price with Elliott Waves")
-    st.plotly_chart(fig,use_container_width=True)
+            pivots = detect_pivots(df_stock)
 
-    st.subheader("Model Comparison")
+            cycles = detect_elliott(pivots)
 
-    if results is not None:
+            results = train_models(df_stock)
 
-        st.dataframe(results)
+            fig = plot_chart(df_stock,pivots,cycles)
 
-        best = results.sort_values(
-            "Accuracy",
-            ascending=False
-        ).iloc[0]
+            st.subheader("Stock Chart with Elliott Waves")
 
-        st.success(
-            f"Best Model: {best['Model']} "
-            f"(Accuracy {best['Accuracy']:.2f})"
-        )
+            st.plotly_chart(fig,use_container_width=True)
+
+            st.subheader("Model Comparison")
+
+            if results is not None:
+
+                st.dataframe(results)
+
+                best = results.sort_values(
+                    "Accuracy",
+                    ascending=False
+                ).iloc[0]
+
+                st.success(
+                    f"Best Model: {best['Model']} "
+                    f"(Accuracy {best['Accuracy']:.2f})"
+                )
