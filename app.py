@@ -386,7 +386,6 @@ if file:
 
     final_value = backtest(stock)
 
-    st.write("Final Portfolio Value:", round(final_value,2))
 
     #################################################
     # PRICE CHART
@@ -400,9 +399,7 @@ if file:
     # FIBONACCI
     #################################################
 
-    st.subheader("Fibonacci Levels")
-
-    st.write(fibonacci_levels(stock))
+   
 
     #################################################
     # 1 YEAR INVESTMENT ANALYSIS
@@ -435,20 +432,8 @@ if file:
 
         col1,col2 = st.columns(2)
 
-        with col1:
-            st.metric(
-                "Predicted Portfolio Value",
-                round(predicted_value,2)
-            )
 
-        with col2:
-            st.metric(
-                "Actual Portfolio Value",
-                round(actual_value,2)
-            )
-
-        pred_return = ((predicted_value-investment)/investment)*100
-        actual_return = ((actual_value-investment)/investment)*100
+        
 
         st.write("Predicted Return %:", round(pred_return,2))
         st.write("Actual Return %:", round(actual_return,2))
